@@ -1,11 +1,11 @@
 [package]
 name = "chunk-parser"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["StealthOfKing <sok@monocyte.host>"]
 edition = "2021"
 license = "GPL-3.0"
 description = "Generic chunk parser pattern"
 
 [dependencies]
-fourcc = { path = "../fourcc" }
-chunk-parser-derive = { path = "../chunk-parser-derive" }
+fourcc = { git = "https://github.com/StealthOfKing/rust-fourcc.git" }
+chunk-parser-derive = { git = "https://github.com/StealthOfKing/rust-chunk-parser-derive.git" }
