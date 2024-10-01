@@ -27,6 +27,21 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// External chunk parser implementation.
 type ParserFunction<P, S> = fn(parser: &mut P, header: &<P as Parser>::Header) -> Result<S>;
 
+/// Helper trait maps unsigned types to signed equivalent.
+pub trait Signed<T> { type Type; }
+
+impl Signed<u64> for u64 { type Type = i64; }
+impl Signed<i64> for i64 { type Type = i64; }
+
+impl Signed<u32> for u32 { type Type = i32; }
+impl Signed<i32> for i32 { type Type = i32; }
+
+impl Signed<u16> for u16 { type Type = i16; }
+impl Signed<i16> for i16 { type Type = i16; }
+
+impl Signed<u8> for u8 { type Type = i8; }
+impl Signed<i8> for i8 { type Type = i8; }
+
 //------------------------------------------------------------------------------
 
 /// The `ParserCommon` trait implements the majority of parser API.
@@ -53,29 +68,28 @@ pub trait ParserCommon {
 
     /// Seek to a position in the reader.
     #[inline]
-    fn seek(&mut self, pos: SeekFrom) -> Result<u64> where Self: Parser {
-        Ok(self.reader().seek(pos)?)
+    fn seek(&mut self, pos: Self::Size) -> Result<u64> where Self: Parser {
+        let offset = pos.try_into().map_err(|_|Error::SizeOverflow)?;
+        Ok(self.reader().seek(SeekFrom::Start(offset))?)
     }
 
     /// Skip a number of bytes.
     #[inline]
-    fn skip(&mut self, size: Self::Size) -> Result<()> where Self: Parser {
-        let pos = size.try_into().map_err(|_|Error::SizeOverflow)?;
-        self.seek(SeekFrom::Current(pos))?;
-        Ok(())
+    fn skip(&mut self, offset: <Self::Size as Signed<Self::Size>>::Type) -> Result<u64> where Self: Parser, i64: From<<Self::Size as Signed<Self::Size>>::Type> {
+        Ok(self.reader().seek(SeekFrom::Current(offset.try_into().map_err(|_|Error::SizeOverflow)?))?)
     }
 
     /// Get the current reader position.
     #[inline]
-    fn position(&mut self) -> Result<u64> {
-        Ok(self.reader().stream_position()?)
+    fn position(&mut self) -> Result<Self::Size> where Self: Parser {
+        Ok(self.reader().stream_position()?.try_into().map_err(|_|Error::SizeOverflow)?)
     }
 
     /// Peek at a sized type.
     fn peek<T>(&mut self) -> Result<T> where Self: Parser, Self::Reader: Reader<T> {
-        let pos = self.position()?;
+        let pos = self.reader().stream_position()?;
         let value = self.read()?;
-        self.seek(SeekFrom::Start(pos))?;
+        self.reader().seek(SeekFrom::Start(pos))?;
         Ok(value)
     }
 
@@ -92,10 +106,10 @@ pub trait ParserCommon {
     fn parse_loop(&mut self, f: ParserFunction<Self, Self::Size>, total_size: u64) -> Result<()> where Self: Parser {
         loop {
             let header = self.read_header()?;
-            let start = self.position()?;
+            let start = self.reader().stream_position()?;
             let size = f(self, &header)?; // the parser function is responsible for parsing the size
             let end = start + TryInto::<u64>::try_into(size).map_err(|_|Error::SizeOverflow)?;
-            let pos = self.position()?;
+            let pos = self.reader().stream_position()?;
             if pos == total_size { break Ok(()); } // function consumed chunk
             else if pos != end { return Err(Error::ParseError); } // function made a mistake
         }
@@ -104,15 +118,15 @@ pub trait ParserCommon {
     /// Parse top level chunk(s) from the reader.
     #[inline]
     fn parse(&mut self, f: ParserFunction<Self, Self::Size>) -> Result<()> where Self: Parser {
-        let total_size = self.seek(SeekFrom::End(0))?;
-        self.seek(SeekFrom::Start(0))?;
+        let total_size = self.reader().seek(SeekFrom::End(0))?;
+        self.reader().seek(SeekFrom::Start(0))?;
         self.parse_loop(f, total_size)
     }
 
     /// Parse nested subchunks within the main parse routine.
     #[inline]
     fn parse_subchunks(&mut self, f: ParserFunction<Self, Self::Size>, total_size: Self::Size) -> Result<()> where Self: Parser {
-        let pos = self.position()?;
+        let pos = self.reader().stream_position()?;
         let size = TryInto::<u64>::try_into(total_size).map_err(|_|Error::SizeOverflow)?;
         self.parse_loop(f, pos + size)
     }
@@ -122,7 +136,7 @@ pub trait ParserCommon {
 pub trait Parser: ParserCommon {
     /// Implementation specific header type.
     type Header;
-    type Size: TryInto<u64> + TryInto<i64>;
+    type Size: TryFrom<u64> + TryInto<u64> + Signed<Self::Size>;
 
     /// Parse the implementation specific header.
     fn read_header(&mut self) -> Result<Self::Header> {
