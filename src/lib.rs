@@ -195,6 +195,7 @@ impl<R> Reader<TypeId> for R where R: Read {
 pub mod prelude {
     pub use super::{FourCC, TypeId};
     pub use super::{Parser, ParserInner};
+    pub use super::chunk_parser;
 }
 
 //==============================================================================
@@ -206,7 +207,6 @@ mod tests {
         pub use super::super::Result;
     }
     use super::prelude::*;
-    use super::chunk_parser;
 
     // minimal iff parser definition
     #[chunk_parser]

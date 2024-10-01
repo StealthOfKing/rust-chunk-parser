@@ -4,7 +4,9 @@
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/StealthOfKing/rust-chunk-parser/rust.yml)
 ![GitHub License](https://img.shields.io/github/license/StealthOfKing/rust-chunk-parser)
 
-Generic chunk parser pattern.
+Generic chunk parser pattern for parsing [type-length-value] formats.
+
+[type-length-value]: https://en.wikipedia.org/wiki/Type%E2%80%93length%E2%80%93value
 
 ## Usage
 
@@ -12,7 +14,6 @@ Define header layout and parser:
 
 ```rust
 use chunk_parser::prelude::*;
-use chunk_parser::chunk_parser;
 
 #[chunk_parser]
 struct IFFParser;
