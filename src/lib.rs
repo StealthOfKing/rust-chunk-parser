@@ -12,6 +12,7 @@ pub use chunk_parser_derive::chunk_parser;
 pub enum Error {
     IoError(IoError), // Forwarded `std::io::Error`.
     ParseError, // General parser error.
+    SizeOverflow, // Size type overflow error.
     UnexpectedValue, // Unexpected value.
     Unimplemented, // Unimplemented code paths.
     UnknownChunk // Unknown chunk type.
@@ -24,7 +25,7 @@ impl From<IoError> for Error { fn from(e: IoError) -> Self { Error::IoError(e) }
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// External chunk parser implementation.
-type ParserFunction<P> = fn(parser: &mut P, header: &<P as Parser>::Header) -> Result<u64>;
+type ParserFunction<P, S> = fn(parser: &mut P, header: &<P as Parser>::Header) -> Result<S>;
 
 //------------------------------------------------------------------------------
 
@@ -52,14 +53,15 @@ pub trait ParserCommon {
 
     /// Seek to a position in the reader.
     #[inline]
-    fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64> where Self: Parser {
         Ok(self.reader().seek(pos)?)
     }
 
     /// Skip a number of bytes.
     #[inline]
-    fn skip(&mut self, size: i32) -> Result<()> {
-        self.seek(SeekFrom::Current(size as i64))?;
+    fn skip(&mut self, size: Self::Size) -> Result<()> where Self: Parser {
+        let pos = size.try_into().map_err(|_|Error::SizeOverflow)?;
+        self.seek(SeekFrom::Current(pos))?;
         Ok(())
     }
 
@@ -70,7 +72,7 @@ pub trait ParserCommon {
     }
 
     /// Peek at a sized type.
-    fn peek<T>(&mut self) -> Result<T> where Self::Reader: Reader<T> {
+    fn peek<T>(&mut self) -> Result<T> where Self: Parser, Self::Reader: Reader<T> {
         let pos = self.position()?;
         let value = self.read()?;
         self.seek(SeekFrom::Start(pos))?;
@@ -87,12 +89,12 @@ pub trait ParserCommon {
     //--------------------------------------------------------------------------
 
     /// Internal parser loop.
-    fn parse_loop(&mut self, f: ParserFunction<Self>, total_size: u64) -> Result<()> where Self: Parser {
+    fn parse_loop(&mut self, f: ParserFunction<Self, Self::Size>, total_size: u64) -> Result<()> where Self: Parser {
         loop {
             let header = self.read_header()?;
             let start = self.position()?;
             let size = f(self, &header)?; // the parser function is responsible for parsing the size
-            let end = start + size;
+            let end = start + TryInto::<u64>::try_into(size).map_err(|_|Error::SizeOverflow)?;
             let pos = self.position()?;
             if pos == total_size { break Ok(()); } // function consumed chunk
             else if pos != end { return Err(Error::ParseError); } // function made a mistake
@@ -101,7 +103,7 @@ pub trait ParserCommon {
 
     /// Parse top level chunk(s) from the reader.
     #[inline]
-    fn parse(&mut self, f: ParserFunction<Self>) -> Result<()> where Self: Parser {
+    fn parse(&mut self, f: ParserFunction<Self, Self::Size>) -> Result<()> where Self: Parser {
         let total_size = self.seek(SeekFrom::End(0))?;
         self.seek(SeekFrom::Start(0))?;
         self.parse_loop(f, total_size)
@@ -109,9 +111,10 @@ pub trait ParserCommon {
 
     /// Parse nested subchunks within the main parse routine.
     #[inline]
-    fn parse_subchunks(&mut self, f: ParserFunction<Self>, total_size: i32) -> Result<()> where Self: Parser {
+    fn parse_subchunks(&mut self, f: ParserFunction<Self, Self::Size>, total_size: Self::Size) -> Result<()> where Self: Parser {
         let pos = self.position()?;
-        self.parse_loop(f, pos + total_size as u64)
+        let size = TryInto::<u64>::try_into(total_size).map_err(|_|Error::SizeOverflow)?;
+        self.parse_loop(f, pos + size)
     }
 }
 
@@ -119,6 +122,7 @@ pub trait ParserCommon {
 pub trait Parser: ParserCommon {
     /// Implementation specific header type.
     type Header;
+    type Size: TryInto<u64> + TryInto<i64>;
 
     /// Parse the implementation specific header.
     fn read_header(&mut self) -> Result<Self::Header> {
@@ -126,7 +130,7 @@ pub trait Parser: ParserCommon {
     }
 
     /// Parser function for guessing a file layout.
-    fn guesser(&mut self, _header: &Self::Header) -> Result<u64> {
+    fn guesser(&mut self, _header: &Self::Header) -> Result<Self::Size> {
         Err(Error::Unimplemented)
     }
 }
@@ -184,6 +188,7 @@ mod tests {
     struct IFFParser;
     impl<R> Parser for IFFParser<R> where R: std::io::Read + std::io::Seek {
         type Header = (TypeId, i32);
+        type Size = i32;
         fn read_header(&mut self) -> chunk_parser::Result<Self::Header> {
             Ok((self.read()?, self.read_be()?))
         }
@@ -211,7 +216,7 @@ mod tests {
                 b"TEST" => parser.skip(*size),
                 _ => Err(chunk_parser::Error::ParseError)
             }?;
-            Ok(*size as u64)
+            Ok(*size)
         }).unwrap();
     }
 }

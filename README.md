@@ -15,7 +15,8 @@ struct IFFParser;
 
 impl<R> Parser for IFFParser<R> where R: std::io::Read + std::io::Seek {
     type Header = (TypeId, i32);
-    fn read_header(&mut self) -> ParserResult<Self::Header> {
+    type Size = i32;
+    fn read_header(&mut self) -> chunk_parser::Result<Self::Header> {
         Ok((self.read()?, self.read_be()?))
     }
 }
@@ -26,13 +27,12 @@ Parse the branching structure:
 ```rust
 fn main() {
     let parser = IFFParser::new(reader);
-
     parser.parse(|parser, ( typeid, size )| {
         match (typeid) {
             b"FORM" => { ... },
-            _ => Err(ParserError::UnknownChunk)
+            _ => Err(chunk_parser::Error::UnknownChunk)
         }
-        Ok(*size as u64)
+        Ok(*size)
     })?;
 }
 ```
