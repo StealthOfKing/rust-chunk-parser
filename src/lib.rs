@@ -44,17 +44,23 @@ impl Signed<i8> for i8 { type Type = i8; }
 
 //------------------------------------------------------------------------------
 
-/// The `ParserReader` trait defines access to the internal reader.
-pub trait ParserReader {
+/// The `ParserInner` trait defines access to the internal properties.
+pub trait ParserInner {
     /// Internal reader type.
     type Reader: Read + Seek;
 
     /// Access the internal `struct Parser::reader`.
     fn reader(&mut self) -> &mut Self::Reader;
+
+    /// Get the internal `struct Parser::depth`.
+    fn depth(&self) -> usize;
+
+    /// Set the internal `struct Parser::depth`.
+    fn set_depth(&mut self, depth: usize);
 }
 
 /// The `Parser` trait implements the majority of parser API.
-pub trait Parser: ParserReader {
+pub trait Parser: ParserInner {
     /// Implementation specific header type.
     type Header;
     type Size: TryFrom<u64> + TryInto<u64> + Signed<Self::Size>;
@@ -143,9 +149,14 @@ pub trait Parser: ParserReader {
     /// Parse nested subchunks within the main parse routine.
     #[inline]
     fn parse_subchunks(&mut self, f: ParserFn<Self, Self::Size>, total_size: Self::Size) -> Result<()> {
-        let pos = self.reader().stream_position()?;
-        let size = TryInto::<u64>::try_into(total_size).map_err(|_|Error::SizeOverflow)?;
-        self.parse_loop(f, pos + size)
+        self.set_depth(self.depth() + 1);
+        match {
+            let pos = self.reader().stream_position()?;
+            let size = TryInto::<u64>::try_into(total_size).map_err(|_|Error::SizeOverflow)?;
+            self.parse_loop(f, pos + size)
+        } {
+            res => { self.set_depth(self.depth() - 1); res }
+        }
     }
 }
 
@@ -183,7 +194,7 @@ impl<R> Reader<TypeId> for R where R: Read {
 /// `chunk_parser` prelude.
 pub mod prelude {
     pub use super::{FourCC, TypeId};
-    pub use super::{Parser, ParserReader};
+    pub use super::{Parser, ParserInner};
 }
 
 //==============================================================================
@@ -225,6 +236,7 @@ mod tests {
     fn parse() {
         let mut iff = IFFParser::buf(DATA);
         iff.parse(|parser, ( typeid, size )| {
+            assert_eq!(parser.depth(), 0);
             match typeid {
                 b"FORM" => parser.expect(b"TEST")?.skip(size - 4),
                 b"TEST" => parser.skip(*size),

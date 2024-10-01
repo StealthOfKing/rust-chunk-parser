@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "chunk-parser"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chunk-parser-derive",
  "fourcc",
@@ -12,8 +12,8 @@ dependencies = [
 
 [[package]]
 name = "chunk-parser-derive"
-version = "0.2.0"
-source = "git+https://github.com/StealthOfKing/rust-chunk-parser-derive.git#f3112e37b22c1abede42126a22a3f9c6555e1a34"
+version = "0.3.0"
+source = "git+https://github.com/StealthOfKing/rust-chunk-parser-derive.git#622fb7e22988fb3da02b905e880de75961c7b7c0"
 dependencies = [
  "quote",
  "syn",
