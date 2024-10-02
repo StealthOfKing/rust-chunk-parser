@@ -1,6 +1,7 @@
 //! Generic chunk parser pattern.
 
 use std::io::{Read, Seek, SeekFrom, Error as IoError};
+use std::mem::MaybeUninit;
 
 pub use fourcc::{FourCC, TypeId};
 pub use chunk_parser_derive::chunk_parser;
@@ -87,6 +88,12 @@ pub trait Parser: ParserInner {
     #[inline]
     fn read_be<T: Sized>(&mut self) -> Result<T> where Self::Reader: Reader<T> {
         self.reader().read_typed_be()
+    }
+
+    /// Read a sized type from the reader into uninitialised memory.
+    #[inline]
+    fn read_fast<T: Sized>(&mut self) -> Result<T> where Self::Reader: ReaderUninit<T> {
+        self.reader().read_fast()
     }
 
     /// Seek to a position in the reader.
@@ -205,6 +212,27 @@ impl<R> Reader<TypeId> for R where R: Read {
         let mut typeid = TypeId::default();
         self.read_exact(typeid.as_mut())?;
         Ok(typeid)
+    }
+}
+
+//------------------------------------------------------------------------------
+
+/// The `ReaderUninit` adds a uninitialised read function.
+pub trait ReaderUninit<T: Sized> {
+    fn read_fast(&mut self) -> Result<T>;
+}
+
+impl<R,T> ReaderUninit<T> for R where R: Read, T: Sized {
+    fn read_fast(&mut self) -> Result<T> {
+        let mut uninit = MaybeUninit::<T>::uninit(); // allocate memory
+
+        let bytes = unsafe { // read directly into pointer
+            let ptr = uninit.as_mut_ptr();
+            self.read_exact(std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<T>()))?;
+            uninit.assume_init() // confirm initialisation
+        };
+
+        Ok(bytes)
     }
 }
 
