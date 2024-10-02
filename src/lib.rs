@@ -28,21 +28,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// External chunk parser implementation.
 type ParserFn<P, S> = fn(parser: &mut P, header: &<P as Parser>::Header) -> Result<S>;
 
-/// Helper trait maps unsigned types to signed equivalent.
-pub trait Signed<T> { type Type; }
-
-impl Signed<u64> for u64 { type Type = i64; }
-impl Signed<i64> for i64 { type Type = i64; }
-
-impl Signed<u32> for u32 { type Type = i32; }
-impl Signed<i32> for i32 { type Type = i32; }
-
-impl Signed<u16> for u16 { type Type = i16; }
-impl Signed<i16> for i16 { type Type = i16; }
-
-impl Signed<u8> for u8 { type Type = i8; }
-impl Signed<i8> for i8 { type Type = i8; }
-
 //------------------------------------------------------------------------------
 
 /// The `ParserInner` trait defines access to the internal properties.
@@ -64,7 +49,7 @@ pub trait ParserInner {
 pub trait Parser: ParserInner {
     /// Implementation specific header type.
     type Header;
-    type Size: TryFrom<u64> + TryInto<u64> + TryInto<i64> + Signed<Self::Size>;
+    type Size: TryFrom<u64> + TryInto<u64> + TryInto<i64>;
 
     /// Parse the implementation specific header.
     fn read_header(&mut self) -> Result<Self::Header> {
