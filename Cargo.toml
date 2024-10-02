@@ -1,6 +1,6 @@
 [package]
 name = "chunk-parser"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["StealthOfKing <sok@monocyte.host>"]
 edition = "2021"
 license = "GPL-3.0"

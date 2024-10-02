@@ -63,7 +63,7 @@ pub trait ParserInner {
 pub trait Parser: ParserInner {
     /// Implementation specific header type.
     type Header;
-    type Size: TryFrom<u64> + TryInto<u64> + Signed<Self::Size>;
+    type Size: TryFrom<u64> + TryInto<u64> + TryInto<i64> + Signed<Self::Size>;
 
     /// Parse the implementation specific header.
     fn read_header(&mut self) -> Result<Self::Header> {
@@ -98,7 +98,13 @@ pub trait Parser: ParserInner {
 
     /// Skip a number of bytes.
     #[inline]
-    fn skip(&mut self, offset: <Self::Size as Signed<Self::Size>>::Type) -> Result<u64> where i64: From<<Self::Size as Signed<Self::Size>>::Type> {
+    fn skip(&mut self, offset: Self::Size) -> Result<u64> {
+        Ok(self.reader().seek(SeekFrom::Current(offset.try_into().map_err(|_|Error::SizeOverflow)?))?)
+    }
+
+    /// Rewind a number of bytes.
+    #[inline]
+    fn rewind(&mut self, offset: Self::Size) -> Result<u64> {
         Ok(self.reader().seek(SeekFrom::Current(offset.try_into().map_err(|_|Error::SizeOverflow)?))?)
     }
 
@@ -166,6 +172,19 @@ pub trait Parser: ParserInner {
 pub trait Reader<T: Sized> {
     fn read_typed(&mut self) -> Result<T>;
     fn read_typed_be(&mut self) -> Result<T> { Err(Error::Unimplemented) }
+}
+
+impl<R> Reader<u32> for R where R: Read {
+    fn read_typed(&mut self) -> Result<u32> {
+        let mut buf = <[u8;4]>::default();
+        self.read_exact(&mut buf)?;
+        Ok(u32::from_le_bytes(buf))
+    }
+    fn read_typed_be(&mut self) -> Result<u32> {
+        let mut buf = <[u8;4]>::default();
+        self.read_exact(&mut buf)?;
+        Ok(u32::from_be_bytes(buf))
+    }
 }
 
 impl<R> Reader<i32> for R where R: Read {
