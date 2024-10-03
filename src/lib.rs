@@ -41,8 +41,11 @@ pub trait ParserInner {
     /// Get the internal `struct Parser::depth`.
     fn depth(&self) -> usize;
 
-    /// Set the internal `struct Parser::depth`.
-    fn set_depth(&mut self, depth: usize);
+    /// Increment the parser depth.
+    fn push(&mut self);
+
+    /// Decrement the parser depth.
+    fn pop(&mut self);
 }
 
 /// The `Parser` trait implements the majority of parser API.
@@ -147,13 +150,13 @@ pub trait Parser: ParserInner {
     /// Parse nested subchunks within the main parse routine.
     #[inline]
     fn parse_subchunks(&mut self, f: ParserFn<Self, Self::Size>, total_size: Self::Size) -> Result<()> {
-        self.set_depth(self.depth() + 1);
+        self.push();
         match {
             let pos = self.reader().stream_position()?;
             let size = TryInto::<u64>::try_into(total_size).map_err(|_|Error::SizeOverflow)?;
             self.parse_loop(f, pos + size)
         } {
-            res => { self.set_depth(self.depth() - 1); res }
+            res => { self.pop(); res }
         }
     }
 }

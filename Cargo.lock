@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "chunk-parser"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "chunk-parser-derive",
  "fourcc",
@@ -12,8 +12,8 @@ dependencies = [
 
 [[package]]
 name = "chunk-parser-derive"
-version = "0.3.1"
-source = "git+https://github.com/StealthOfKing/rust-chunk-parser-derive.git#790c783bc78081b2279cefc6f27c1144689cf933"
+version = "0.3.2"
+source = "git+https://github.com/StealthOfKing/rust-chunk-parser-derive.git#af17190f435d7aee36ff99fee6d6c3158555b22c"
 dependencies = [
  "quote",
  "syn",
@@ -21,8 +21,8 @@ dependencies = [
 
 [[package]]
 name = "fourcc"
-version = "0.2.2"
-source = "git+https://github.com/StealthOfKing/rust-fourcc.git#d296b8497a95821ada6209f73eca32b2fb3f3090"
+version = "0.2.3"
+source = "git+https://github.com/StealthOfKing/rust-fourcc.git#df6032496ddbf0812e35ba213119476f9b87948b"
 
 [[package]]
 name = "proc-macro2"
