@@ -16,14 +16,13 @@ Define header layout and parser:
 use chunk_parser::prelude::*;
 
 #[chunk_parser]
-struct IFFParser;
+struct IFFParser {}
 
-impl<R> Parser for IFFParser<R> where R: std::io::Read + std::io::Seek {
-    type Header = (TypeId, i32);
-    type Size = i32;
-    fn read_header(&mut self) -> chunk_parser::Result<Self::Header> {
-        Ok((self.read()?, self.read_be()?))
-    }
+struct IFFHeader { typeid: TypeId, length: u32 }
+
+impl<R: Read> HeaderParser<IFFHeader> for IFFParser<R> {
+    fn header(&mut self) -> Result<IFFHeader>
+        { Ok( IFFHeader { typeid: self.read()?, length: self.read_be()? } ) }
 }
 ```
 

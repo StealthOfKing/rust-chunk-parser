@@ -3,6 +3,8 @@
 use std::io::{Read, Seek, SeekFrom, Error as IoError};
 use std::mem::MaybeUninit;
 
+use num::traits::PrimInt;
+
 pub use fourcc::{FourCC, TypeId};
 pub use chunk_parser_derive::chunk_parser;
 
@@ -14,7 +16,6 @@ pub enum Error {
     IoError(IoError), // Forwarded `std::io::Error`.
     ParseError, // General parser error.
     SizeOverflow, // Size type overflow error.
-    UnexpectedValue, // Unexpected value.
     Unimplemented, // Unimplemented code paths.
     UnknownChunk // Unknown chunk type.
 }
@@ -25,123 +26,113 @@ impl From<IoError> for Error { fn from(e: IoError) -> Self { Error::IoError(e) }
 /// Error type is always an `Error` enum.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// External chunk parser implementation.
-type ParserFn<P, S> = fn(parser: &mut P, header: &<P as Parser>::Header) -> Result<S>;
-
 //------------------------------------------------------------------------------
 
-/// The `ParserInner` trait defines access to the internal properties.
-pub trait ParserInner {
-    /// Internal reader type.
-    type Reader: Read + Seek;
-
-    /// Access the internal `struct Parser::reader`.
-    fn reader(&mut self) -> &mut Self::Reader;
-
-    /// Get the internal `struct Parser::depth`.
-    fn depth(&self) -> usize;
-
-    /// Increment the parser depth.
-    fn push(&mut self);
-
-    /// Decrement the parser depth.
-    fn pop(&mut self);
+/// The `ParserReader` trait defines access to the inner reader.
+pub trait ParserReader<R> {
+    /// Access the inner reader.
+    fn reader(&mut self) -> &mut R;
 }
 
-/// The `Parser` trait implements the majority of parser API.
-pub trait Parser: ParserInner {
-    /// Implementation specific header type.
-    type Header;
-    type Size: TryFrom<u64> + TryInto<u64> + TryInto<i64>;
-
-    /// Parse the implementation specific header.
-    fn read_header(&mut self) -> Result<Self::Header> {
-        Err(Error::Unimplemented)
-    }
-
-    /// Parser function for guessing a file layout.
-    fn guesser(&mut self, _header: &Self::Header) -> Result<Self::Size> {
-        Err(Error::Unimplemented)
-    }
-
-    //--------------------------------------------------------------------------
-
-    /// Read a sized type from the reader.
-    #[inline]
-    fn read<T: Sized>(&mut self) -> Result<T> where Self::Reader: Reader<T> {
-        self.reader().read_typed()
-    }
-
-    /// Read a big endian type from the reader.
-    #[inline]
-    fn read_be<T: Sized>(&mut self) -> Result<T> where Self::Reader: Reader<T> {
-        self.reader().read_typed_be()
-    }
-
-    /// Read a sized type from the reader into uninitialised memory.
-    #[inline]
-    fn read_fast<T: Sized>(&mut self) -> Result<T> where Self::Reader: ReaderUninit<T> {
-        self.reader().read_fast()
-    }
-
+/// The `ParserSeek` trait implements positional API.
+pub trait ParserSeek<R: Seek>: ParserReader<R> {
     /// Seek to a position in the reader.
-    #[inline]
-    fn seek(&mut self, pos: Self::Size) -> Result<u64> {
-        let offset = pos.try_into().map_err(|_|Error::SizeOverflow)?;
-        Ok(self.reader().seek(SeekFrom::Start(offset))?)
+    #[inline] fn seek(&mut self, offset: u64) -> Result<u64> {
+        let pos = SeekFrom::Start(offset);
+        Ok( self.reader().seek(pos)? )
     }
 
     /// Skip a number of bytes.
-    #[inline]
-    fn skip(&mut self, offset: Self::Size) -> Result<u64> {
-        Ok(self.reader().seek(SeekFrom::Current(offset.try_into().map_err(|_|Error::SizeOverflow)?))?)
+    #[inline] fn skip(&mut self, offset: u64) -> Result<u64> {
+        let pos = SeekFrom::Current(offset as i64);
+        self.reader().seek(pos)?;
+        Ok( offset )
     }
 
     /// Rewind a number of bytes.
-    #[inline]
-    fn rewind(&mut self, offset: Self::Size) -> Result<u64> {
-        Ok(self.reader().seek(SeekFrom::Current(offset.try_into().map_err(|_|Error::SizeOverflow)?))?)
+    #[inline] fn rewind(&mut self, offset: u64) -> Result<u64> {
+        let pos = SeekFrom::Current(-(offset as i64));
+        Ok( self.reader().seek(pos)? )
     }
 
     /// Get the current reader position.
-    #[inline]
-    fn position(&mut self) -> Result<Self::Size> {
-        Ok(self.reader().stream_position()?.try_into().map_err(|_|Error::SizeOverflow)?)
+    #[inline] fn position(&mut self) -> Result<u64>
+        { Ok( self.reader().stream_position()? ) }
+}
+
+/// The `ParserDepth` trait can be used to track depth.
+pub trait ParserDepth {
+    /// Access the inner depth property.
+    fn inner_depth(&mut self) -> &mut u8;
+
+    /// Get the current parser depth.
+    fn depth(&mut self) -> u8 { *self.inner_depth() }
+
+    /// Increment the parser depth.
+    #[inline] fn push(&mut self) { *self.inner_depth() += 1; }
+
+    /// Decrement the parser depth.
+    #[inline] fn pop(&mut self) { *self.inner_depth() -= 1; }
+}
+
+/// The `ParserUninit` trait provides typed read API.
+pub trait ParserRead<R: Read>: ParserReader<R> {
+    /// Read a sized type from the reader into uninitialised memory.
+    #[inline] fn read<T: Sized>(&mut self) -> Result<T>
+        { self.reader().read_uninit() }
+
+    /// Big endian read for all primitive integer types.
+    #[inline] fn read_be<T: PrimInt>(&mut self) -> Result<T>
+        { Ok( T::swap_bytes(self.reader().read_uninit()?) ) }
+}
+
+//------------------------------------------------------------------------------
+
+/// The `ReaderUninit` trait adds a typed read function.
+pub trait ReaderUninit<T: Sized> {
+    fn read_uninit(&mut self) -> Result<T>;
+}
+
+// Blanket implementation of typed read.
+impl<R: Read, T: Sized> ReaderUninit<T> for R {
+    fn read_uninit(&mut self) -> Result<T> {
+        let mut uninit = MaybeUninit::<T>::uninit(); // allocate memory
+        Ok( unsafe { // read directly into pointer
+            let ptr = uninit.as_mut_ptr();
+            self.read_exact(std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<T>()))?;
+            uninit.assume_init() // confirm initialisation
+        } )
     }
+}
 
-    /// Peek at a sized type.
-    fn peek<T>(&mut self) -> Result<T> where Self::Reader: Reader<T> {
-        let pos = self.reader().stream_position()?;
-        let value = self.read()?;
-        self.reader().seek(SeekFrom::Start(pos))?;
-        Ok(value)
-    }
+//------------------------------------------------------------------------------
 
-    /// Expect a specific value.
-    fn expect<T: Eq>(&mut self, value: &T) -> Result<&mut Self> where Self::Reader: Reader<T> {
-        let actual = self.read::<T>()?;
-        if &actual == value { Ok(self) }
-        else { Err(Error::UnexpectedValue) }
-    }
+/// The `HeaderParser` trait defines unique header parsing logic.
+pub trait HeaderParser<H> {
+    fn header(&mut self) -> Result<H>;
+}
 
-    //--------------------------------------------------------------------------
+/// Signature for parser closures.
+pub type ParserFn<P,H> = fn(parser: &mut P, header: &H) -> Result<u64>;
 
+/// The `ChunkParser` trait defines the inner parser loop.
+pub trait ChunkParser<R: Read + Seek>: ParserRead<R> + ParserDepth {
     /// Internal parser loop.
-    fn parse_loop(&mut self, f: ParserFn<Self, Self::Size>, total_size: u64) -> Result<()> {
+    fn parse_loop<H>(&mut self, f: ParserFn<Self,H>, total_size: u64) -> Result<()> where Self: HeaderParser<H> {
         loop {
-            let header = self.read_header()?;
+            let header = self.header()?;
             let start = self.reader().stream_position()?;
             let size = f(self, &header)?; // the parser function is responsible for parsing the size
-            let end = start + TryInto::<u64>::try_into(size).map_err(|_|Error::SizeOverflow)?;
+            let end = start + size;
             let pos = self.reader().stream_position()?;
-            if pos == total_size { break Ok(()); } // function consumed chunk
-            else if pos != end { return Err(Error::ParseError); } // function made a mistake
+            if pos == total_size { break Ok(()) } // function consumed chunk
+            else if pos != end { break Err(Error::ParseError) } // function made a mistake
         }
     }
 
     /// Parse top level chunk(s) from the reader.
     #[inline]
-    fn parse(&mut self, f: ParserFn<Self, Self::Size>) -> Result<()> {
+    fn parse<H>(&mut self, f: ParserFn<Self,H>) -> Result<()> where Self: HeaderParser<H> {
         let total_size = self.reader().seek(SeekFrom::End(0))?;
         self.reader().seek(SeekFrom::Start(0))?;
         self.parse_loop(f, total_size)
@@ -149,12 +140,11 @@ pub trait Parser: ParserInner {
 
     /// Parse nested subchunks within the main parse routine.
     #[inline]
-    fn parse_subchunks(&mut self, f: ParserFn<Self, Self::Size>, total_size: Self::Size) -> Result<()> {
+    fn subchunks<H>(&mut self, f: ParserFn<Self,H>, total_size: u64) -> Result<()> where Self: HeaderParser<H> {
         self.push();
         match {
             let pos = self.reader().stream_position()?;
-            let size = TryInto::<u64>::try_into(total_size).map_err(|_|Error::SizeOverflow)?;
-            self.parse_loop(f, pos + size)
+            self.parse_loop(f, pos + total_size)
         } {
             res => { self.pop(); res }
         }
@@ -163,73 +153,10 @@ pub trait Parser: ParserInner {
 
 //------------------------------------------------------------------------------
 
-/// The `Reader` trait adds a typed read functions to `std::io::Read`.
-pub trait Reader<T: Sized> {
-    fn read_typed(&mut self) -> Result<T>;
-    fn read_typed_be(&mut self) -> Result<T> { Err(Error::Unimplemented) }
-}
-
-impl<R> Reader<u32> for R where R: Read {
-    fn read_typed(&mut self) -> Result<u32> {
-        let mut buf = <[u8;4]>::default();
-        self.read_exact(&mut buf)?;
-        Ok(u32::from_le_bytes(buf))
-    }
-    fn read_typed_be(&mut self) -> Result<u32> {
-        let mut buf = <[u8;4]>::default();
-        self.read_exact(&mut buf)?;
-        Ok(u32::from_be_bytes(buf))
-    }
-}
-
-impl<R> Reader<i32> for R where R: Read {
-    fn read_typed(&mut self) -> Result<i32> {
-        let mut buf = <[u8;4]>::default();
-        self.read_exact(&mut buf)?;
-        Ok(i32::from_le_bytes(buf))
-    }
-    fn read_typed_be(&mut self) -> Result<i32> {
-        let mut buf = <[u8;4]>::default();
-        self.read_exact(&mut buf)?;
-        Ok(i32::from_be_bytes(buf))
-    }
-}
-
-impl<R> Reader<TypeId> for R where R: Read {
-    fn read_typed(&mut self) -> Result<TypeId> {
-        let mut typeid = TypeId::default();
-        self.read_exact(typeid.as_mut())?;
-        Ok(typeid)
-    }
-}
-
-//------------------------------------------------------------------------------
-
-/// The `ReaderUninit` adds a uninitialised read function.
-pub trait ReaderUninit<T: Sized> {
-    fn read_fast(&mut self) -> Result<T>;
-}
-
-impl<R,T> ReaderUninit<T> for R where R: Read, T: Sized {
-    fn read_fast(&mut self) -> Result<T> {
-        let mut uninit = MaybeUninit::<T>::uninit(); // allocate memory
-
-        let bytes = unsafe { // read directly into pointer
-            let ptr = uninit.as_mut_ptr();
-            self.read_exact(std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<T>()))?;
-            uninit.assume_init() // confirm initialisation
-        };
-
-        Ok(bytes)
-    }
-}
-
-//------------------------------------------------------------------------------
-
 /// `chunk_parser` prelude.
 pub mod prelude {
     pub use super::{FourCC, TypeId};
-    pub use super::{Parser, ParserInner};
+    pub use super::{HeaderParser, ChunkParser, ParserReader, ParserSeek, ParserRead, ParserDepth, ParserFn};
     pub use super::chunk_parser;
 }
 
@@ -242,15 +169,54 @@ mod tests {
         pub use super::super::Result;
     }
     use super::prelude::*;
+    use chunk_parser::{Error, Result};
 
-    // minimal iff parser definition
+    // full iff parser definition without macro
+    use std::io::{Read, Seek};
+    struct IFFParserFull<R> { reader: R, depth: u8 }
+    impl<R: Read> IFFParserFull<R> { fn new(reader: R) -> IFFParserFull<R> { IFFParserFull{ reader, depth: 0 } } }
+    impl<R> ParserReader<R> for IFFParserFull<R> { fn reader(&mut self) -> &mut R { &mut self.reader } }
+    impl<R: Seek> ParserSeek<R> for IFFParserFull<R> {}
+    impl<R: Read> ParserRead<R> for IFFParserFull<R> {}
+    impl<R> ParserDepth for IFFParserFull<R> { fn inner_depth(&mut self) -> &mut u8 { &mut self.depth } }
+    impl<R: Read + Seek> ChunkParser<R> for IFFParserFull<R> {}
+
+    // Simple header definition.
+    struct IFFHeader { typeid: TypeId, length: u32 }
+    impl<R: Read> HeaderParser<IFFHeader> for IFFParserFull<R> {
+        fn header(&mut self) -> Result<IFFHeader>
+            { Ok( IFFHeader { typeid: self.read()?, length: self.read_be()? } ) }
+    }
+
+    // minimal iff parser definition with macro
     #[chunk_parser]
     struct IFFParser;
-    impl<R> Parser for IFFParser<R> where R: std::io::Read + std::io::Seek {
-        type Header = (TypeId, i32);
-        type Size = i32;
-        fn read_header(&mut self) -> chunk_parser::Result<Self::Header> {
-            Ok((self.read()?, self.read_be()?))
+    impl<R: Read> HeaderParser<IFFHeader> for IFFParser<R> {
+        fn header(&mut self) -> Result<IFFHeader>
+            { Ok( IFFHeader { typeid: self.read()?, length: self.read_be()? } ) }
+    }
+
+    // minimal custom parser loop
+    #[chunk_parser(custom,depth)]
+    struct IFFParserCustom;
+    impl<R: Read> HeaderParser<IFFHeader> for IFFParserCustom<R> {
+        fn header(&mut self) -> Result<IFFHeader>
+            { Ok( IFFHeader { typeid: self.read()?, length: self.read_be::<u32>()? - 8 } ) }
+    }
+    impl<R: std::io::Read + std::io::Seek> ChunkParser<R> for IFFParserCustom<R> {
+        fn parse_loop<H>(&mut self, f: ParserFn<Self,H>, total_size: u64) -> Result<()> where Self: HeaderParser<H> {
+            self.push();
+            match loop {
+                let header = self.header()?;
+                let start = self.reader().stream_position()?;
+                let size = f(self, &header)? + 8; // the parser function is responsible for parsing the size
+                let end = start + size;
+                let pos = self.reader().stream_position()?;
+                if pos == total_size { break Ok(()) } // function consumed chunk
+                else if pos != end { break Err(Error::ParseError) } // function made a mistake
+            } {
+                res => { self.pop(); res }
+            }
         }
     }
 
@@ -268,16 +234,30 @@ mod tests {
     ];
 
     #[test]
-    fn parse() {
-        let mut iff = IFFParser::buf(DATA);
-        iff.parse(|parser, ( typeid, size )| {
-            assert_eq!(parser.depth(), 0);
-            match typeid {
-                b"FORM" => parser.expect(b"TEST")?.skip(size - 4),
-                b"TEST" => parser.skip(*size),
-                _ => Err(chunk_parser::Error::ParseError)
-            }?;
-            Ok(*size)
-        }).unwrap();
+    fn without_macro() -> Result<()> {
+        let mut cursor = std::io::Cursor::new(DATA);
+        let mut iff = IFFParserFull::new(&mut cursor);
+        iff.parse(|parser, header| {
+            if &header.typeid != b"FORM" { panic!(); }
+            parser.skip(header.length as u64)
+        })
+    }
+
+    #[test]
+    fn with_macro() -> Result<()> {
+        let mut cursor = std::io::Cursor::new(DATA);
+        let mut iff = IFFParser::new(&mut cursor);
+        iff.parse(|parser, header| parser.skip(header.length as u64))
+    }
+
+    #[test]
+    fn cursor() -> Result<()> {
+        IFFParser::cursor(DATA).parse(|parser, header| parser.skip(header.length as u64))
+    }
+
+    #[test]
+    fn custom() -> Result<()> {
+        let mut iff = IFFParserCustom::cursor(DATA);
+        iff.parse(|parser, header| parser.skip(header.length as u64 + 8))
     }
 }
