@@ -10,7 +10,7 @@ checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
 
 [[package]]
 name = "chunk-parser"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chunk-parser-derive",
  "fourcc",
@@ -19,8 +19,8 @@ dependencies = [
 
 [[package]]
 name = "chunk-parser-derive"
-version = "0.4.0"
-source = "git+https://github.com/StealthOfKing/rust-chunk-parser-derive.git#db1e898b39c51b9f53fcaa426349be01833ff6d6"
+version = "0.4.2"
+source = "git+https://github.com/StealthOfKing/rust-chunk-parser-derive.git#23580b0a87d07ea04c0c873a507a7a05dadd7e9f"
 dependencies = [
  "quote",
  "syn",
@@ -106,9 +106,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.86"
+version = "1.0.87"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e719e8df665df0d1c8fbfd238015744736151d4445ec0836b8e628aae103b77"
+checksum = "b3e4daa0dcf6feba26f985457cdf104d4b4256fc5a09547140f3631bb076b19a"
 dependencies = [
  "unicode-ident",
 ]

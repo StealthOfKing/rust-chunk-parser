@@ -31,7 +31,7 @@ Parse the branching structure:
 ```rust
 fn main() {
     let parser = IFFParser::new(reader);
-    parser.parse(|parser, ( typeid, size )| {
+    parser.parse(|parser, IFFHeader { typeid, size }| {
         match (typeid) {
             b"FORM" => { ... },
             _ => Err(chunk_parser::Error::UnknownChunk)

@@ -2,6 +2,7 @@
 
 use std::io::{Read, Seek, SeekFrom, Error as IoError};
 use std::mem::MaybeUninit;
+use std::path::PathBuf;
 
 use num::traits::PrimInt;
 
@@ -29,12 +30,27 @@ pub type Result<T> = std::result::Result<T, Error>;
 //------------------------------------------------------------------------------
 
 /// The `ParserReader` trait defines access to the inner reader.
+///
+/// All parsing traits operate on an internal reader type `<R>`, usually
+/// implementing a combination of `std::io::Read` and `Seek`. This generic trait
+/// adds mutable borrowed access and allows reclaiming the reader for any type
+/// `<R>` that implements `DummyReader<R>`.
 pub trait ParserReader<R> {
     /// Access the inner reader.
     fn reader(&mut self) -> &mut R;
+
+    // Replace with a dummy file.
+    fn take_reader(&mut self) -> R where R: DummyReader {
+        std::mem::replace(self.reader(), R::dummy())
+    }
 }
 
 /// The `ParserSeek` trait implements positional API.
+///
+/// Seek operations are an essential part of efficiently parsing block chunk
+/// file formats. `ParserSeek` varies slightly from `std::io::Seek` due to the
+/// bespoke design of `ChunkParser` for parsing header prefixed chunks where
+/// the length is guaranteed.
 pub trait ParserSeek<R: Seek>: ParserReader<R> {
     /// Seek to a position in the reader.
     #[inline] fn seek(&mut self, offset: u64) -> Result<u64> {
@@ -61,6 +77,10 @@ pub trait ParserSeek<R: Seek>: ParserReader<R> {
 }
 
 /// The `ParserDepth` trait can be used to track depth.
+///
+/// Many block chunk file formats use nested groups to provide hierarchical
+/// structure to their data. This trait adds API for tracking the parser depth,
+/// but must be manually implemented in the parser loop.
 pub trait ParserDepth {
     /// Access the inner depth property.
     fn inner_depth(&mut self) -> &mut u8;
@@ -75,7 +95,26 @@ pub trait ParserDepth {
     #[inline] fn pop(&mut self) { *self.inner_depth() -= 1; }
 }
 
-/// The `ParserUninit` trait provides typed read API.
+/// The `ParserPath` trait accesses the the file path.
+///
+/// It can be useful to know where a resource was loaded from, not least of all
+/// for debugging purposes. This trait adds access to the original location used
+/// to create the parser.
+pub trait ParserPath {
+    /// Access the parser file path.
+    fn path(&self) -> &PathBuf;
+}
+
+/// The `ParserRead` trait provides typed read API.
+///
+/// The `ParserRead` API uses `read_uninit()` to read any sized type directly
+/// into uninitialised memory.
+///
+/// Block chunk file formats like IFF often layout their data in such a way that
+/// it can be directly loaded into packed struct layouts in memory. This can
+/// reduce operational overhead when parsing data by grouping together many
+/// smaller variables. Use `ParserRead` in conjunction with packed struct types
+/// like those defined in `esm_bindings`.
 pub trait ParserRead<R: Read>: ParserReader<R> {
     /// Read a sized type from the reader into uninitialised memory.
     #[inline] fn read<T: Sized>(&mut self) -> Result<T>
@@ -102,6 +141,20 @@ impl<R: Read, T: Sized> ReaderUninit<T> for R {
             self.read_exact(std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<T>()))?;
             uninit.assume_init() // confirm initialisation
         } )
+    }
+}
+
+//------------------------------------------------------------------------------
+
+/// Dummy constructor trait for reader types.
+pub trait DummyReader {
+    fn dummy() -> Self;
+}
+
+impl DummyReader for std::io::BufReader<std::fs::File> {
+    fn dummy() -> std::io::BufReader<std::fs::File> {
+        let file = std::fs::File::open("dummy.txt").unwrap();
+        std::io::BufReader::new(file)
     }
 }
 
@@ -156,7 +209,12 @@ pub trait ChunkParser<R: Read + Seek>: ParserRead<R> + ParserDepth {
 /// `chunk_parser` prelude.
 pub mod prelude {
     pub use super::{FourCC, TypeId};
-    pub use super::{HeaderParser, ChunkParser, ParserReader, ParserSeek, ParserRead, ParserDepth, ParserFn};
+    pub use super::{
+        HeaderParser, ChunkParser,
+        ParserReader, ParserRead, ParserSeek,
+        ParserDepth, ParserPath,
+        ParserFn
+    };
     pub use super::chunk_parser;
 }
 
